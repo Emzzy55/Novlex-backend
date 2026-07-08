@@ -3,14 +3,14 @@ const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 
 const PLANS = [
-  { name: 'Starter', amount: 3000, dailyEarning: 600 },
-  { name: 'Bronze', amount: 5000, dailyEarning: 1000 },
-  { name: 'Silver', amount: 10000, dailyEarning: 1500 },
-  { name: 'Gold', amount: 30000, dailyEarning: 3500 },
-  { name: 'Platinum', amount: 50000, dailyEarning: 5000 },
-  { name: 'Diamond', amount: 150000, dailyEarning: 10000 },
-  { name: 'Elite', amount: 500000, dailyEarning: 30000 },
-  { name: 'VIP', amount: 1000000, dailyEarning: 60000 },
+  { name: 'Novlex 1', amount: 3000, dailyEarning: 600 },
+  { name: 'Novlex 2', amount: 5000, dailyEarning: 1000 },
+  { name: 'Novlex 3', amount: 10000, dailyEarning: 2000 },
+  { name: 'Novlex 4', amount: 30000, dailyEarning: 3500 },
+  { name: 'Novlex 5', amount: 50000, dailyEarning: 5000 },
+  { name: 'Novlex 6', amount: 150000, dailyEarning: 10000 },
+  { name: 'Novlex 7', amount: 500000, dailyEarning: 30000 },
+  { name: 'Novlex 8', amount: 1000000, dailyEarning: 60000 },
 ];
 
 exports.getPlans = (req, res) => res.json({ success: true, plans: PLANS });
@@ -34,6 +34,61 @@ exports.invest = async (req, res) => {
       if (user.walletBalance < plan.amount) return res.status(400).json({ success: false, message: 'Insufficient wallet balance.' });
       user.walletBalance -= plan.amount;
       user.totalDeposited += plan.amount;
+      await user.save();
+      await Transaction.create({ user: user._id, type: 'reinvestment', amount: plan.amount, status: 'completed', description: `Invested in ${plan.name} plan (from wallet)` });
+    } else {
+      if (user.walletBalance < plan.amount) return res.status(400).json({ success: false, message: 'Insufficient wallet balance. Please make a deposit first.' });
+      user.walletBalance -= plan.amount;
+      user.totalDeposited += plan.amount;
+      await user.save();
+    }
+
+    const investment = await Investment.create({ user: user._id, planName: plan.name, amount: plan.amount, dailyEarning: plan.dailyEarning });
+
+    // Pay referral commissions on investment
+    if (user.referredBy) {
+      const level1 = await User.findById(user.referredBy);
+      if (level1) {
+        const commission1 = plan.amount * 0.15;
+        level1.walletBalance += commission1;
+        level1.totalReferralEarnings += commission1;
+        await level1.save();
+        await Transaction.create({ user: level1._id, type: 'referral_bonus', amount: commission1, status: 'completed', description: `Level 1 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 1 });
+
+        if (level1.referredBy) {
+          const level2 = await User.findById(level1.referredBy);
+          if (level2) {
+            const commission2 = plan.amount * 0.03;
+            level2.walletBalance += commission2;
+            level2.totalReferralEarnings += commission2;
+            await level2.save();
+            await Transaction.create({ user: level2._id, type: 'referral_bonus', amount: commission2, status: 'completed', description: `Level 2 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 2 });
+
+            if (level2.referredBy) {
+              const level3 = await User.findById(level2.referredBy);
+              if (level3) {
+                const commission3 = plan.amount * 0.02;
+                level3.walletBalance += commission3;
+                level3.totalReferralEarnings += commission3;
+                await level3.save();
+                await Transaction.create({ user: level3._id, type: 'referral_bonus', amount: commission3, status: 'completed', description: `Level 3 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 3 });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    res.status(201).json({ success: true, message: `Successfully invested in ${plan.name} plan!`, investment });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+};
+
+exports.getMyInvestments = async (req, res) => {
+  try {
+    const investments = await Investment.find({ user: req.user.id }).sort({ createdAt: -1 });
+    res.json({ success: true, investments });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+};
       await user.save();
       await Transaction.create({ user: user._id, type: 'reinvestment', amount: plan.amount, status: 'completed', description: `Invested in ${plan.name} plan (from wallet)` });
     } else {
