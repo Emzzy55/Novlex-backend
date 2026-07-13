@@ -20,48 +20,46 @@ exports.invest = async (req, res) => {
     const { planName, fromWallet } = req.body;
     const plan = PLANS.find(p => p.name === planName);
     if (!plan) return res.status(400).json({ success: false, message: 'Invalid plan.' });
+
     const user = await User.findById(req.user.id);
+
+    // Check operating hours: Mon-Sun 10am-6pm
     const now = new Date();
     const hours = now.getHours();
     if (hours < 10 || hours >= 18) {
       return res.status(400).json({ success: false, message: 'Investments are only accepted between 10:00 AM and 6:00 PM.' });
     }
-    if (fromWallet) {
-      if (user.walletBalance < plan.amount) return res.status(400).json({ success: false, message: 'Insufficient wallet balance.' });
-      user.walletBalance -= plan.amount;
-      user.totalDeposited += plan.amount;
-      await user.save();
-      await Transaction.create({ user: user._id, type: 'reinvestment', amount: plan.amount, status: 'completed', description: `Invested in ${plan.name} plan (from wallet)` });
-    } else {
-      if (user.walletBalance < plan.amount) return res.status(400).json({ success: false, message: 'Insufficient wallet balance. Please make a deposit first.' });
-      user.walletBalance -= plan.amount;
-      user.totalDeposited += plan.amount;
-      await user.save();
+
+    // Atomic balance check-and-deduct to prevent race conditions from concurrent requests
+    const updatedUser = await User.findOneAndUpdate(
+      { _id: req.user.id, walletBalance: { $gte: plan.amount } },
+      { $inc: { walletBalance: -plan.amount, totalDeposited: plan.amount } },
+      { new: true }
+    );
+    if (!updatedUser) {
+      return res.status(400).json({ success: false, message: fromWallet ? 'Insufficient wallet balance.' : 'Insufficient wallet balance. Please make a deposit first.' });
     }
+    await Transaction.create({ user: user._id, type: 'reinvestment', amount: plan.amount, status: 'completed', description: fromWallet ? `Invested in ${plan.name} plan (from wallet)` : `Invested in ${plan.name} plan` });
+
     const investment = await Investment.create({ user: user._id, planName: plan.name, amount: plan.amount, dailyEarning: plan.dailyEarning });
+
+    // Pay referral commissions on investment
     if (user.referredBy) {
-      const level1 = await User.findById(user.referredBy);
+      const level1 = await User.findByIdAndUpdate(user.referredBy, { $inc: { walletBalance: plan.amount * 0.15, totalReferralEarnings: plan.amount * 0.15 } }, { new: true });
       if (level1) {
         const commission1 = plan.amount * 0.15;
-        level1.walletBalance += commission1;
-        level1.totalReferralEarnings += commission1;
-        await level1.save();
         await Transaction.create({ user: level1._id, type: 'referral_bonus', amount: commission1, status: 'completed', description: `Level 1 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 1 });
+
         if (level1.referredBy) {
-          const level2 = await User.findById(level1.referredBy);
+          const commission2 = plan.amount * 0.03;
+          const level2 = await User.findByIdAndUpdate(level1.referredBy, { $inc: { walletBalance: commission2, totalReferralEarnings: commission2 } }, { new: true });
           if (level2) {
-            const commission2 = plan.amount * 0.03;
-            level2.walletBalance += commission2;
-            level2.totalReferralEarnings += commission2;
-            await level2.save();
             await Transaction.create({ user: level2._id, type: 'referral_bonus', amount: commission2, status: 'completed', description: `Level 2 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 2 });
+
             if (level2.referredBy) {
-              const level3 = await User.findById(level2.referredBy);
+              const commission3 = plan.amount * 0.02;
+              const level3 = await User.findByIdAndUpdate(level2.referredBy, { $inc: { walletBalance: commission3, totalReferralEarnings: commission3 } }, { new: true });
               if (level3) {
-                const commission3 = plan.amount * 0.02;
-                level3.walletBalance += commission3;
-                level3.totalReferralEarnings += commission3;
-                await level3.save();
                 await Transaction.create({ user: level3._id, type: 'referral_bonus', amount: commission3, status: 'completed', description: `Level 3 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 3 });
               }
             }
@@ -69,6 +67,7 @@ exports.invest = async (req, res) => {
         }
       }
     }
+
     res.status(201).json({ success: true, message: `Successfully invested in ${plan.name} plan!`, investment });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
