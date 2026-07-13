@@ -39,13 +39,16 @@ exports.requestWithdrawal = async (req, res) => {
     const hours = now.getHours();
     if (hours < 10 || hours >= 18) return res.status(400).json({ success: false, message: 'Withdrawals are only processed between 10:00 AM and 6:00 PM.' });
 
-    const user = await User.findById(req.user.id);
     const charge = amount * 0.10;
     const netAmount = amount - charge;
-    if (user.walletBalance < amount) return res.status(400).json({ success: false, message: 'Insufficient wallet balance.' });
 
-    user.walletBalance -= amount;
-    await user.save();
+    // Atomic balance check-and-deduct to prevent race conditions from concurrent requests
+    const user = await User.findOneAndUpdate(
+      { _id: req.user.id, walletBalance: { $gte: Number(amount) } },
+      { $inc: { walletBalance: -Number(amount) } },
+      { new: true }
+    );
+    if (!user) return res.status(400).json({ success: false, message: 'Insufficient wallet balance.' });
 
     const transaction = await Transaction.create({
       user: req.user.id, type: 'withdrawal', amount: Number(amount), status: 'pending',
