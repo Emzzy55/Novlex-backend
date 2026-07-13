@@ -20,4 +20,12 @@ const withdrawLimiter = rateLimit({
   message: { success: false, message: 'Too many withdrawal requests. Try again later.' },
 });
 
-module.exports = { loginLimiter, generalLimiter, withdrawLimiter };
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5,
+  message: { success: false, message: 'Too many accounts created from this location. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+module.exports = { loginLimiter, generalLimiter, withdrawLimiter, registerLimiter };
