@@ -54,16 +54,24 @@ exports.getUserDetail = async (req, res) => {
 exports.updateUserBalance = async (req, res) => {
   try {
     const { amount, action, note } = req.body; // action: 'add' or 'deduct'
+    if (!amount || isNaN(amount) || Number(amount) <= 0) return res.status(400).json({ success: false, message: 'Valid amount is required.' });
+    if (!['add', 'deduct'].includes(action)) return res.status(400).json({ success: false, message: 'Action must be "add" or "deduct".' });
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
-    if (action === 'add') { user.walletBalance += Number(amount); }
-    else if (action === 'deduct') {
-      if (user.walletBalance < amount) return res.status(400).json({ success: false, message: 'Insufficient balance to deduct.' });
-      user.walletBalance -= Number(amount);
+    if (action === 'add') {
+      user.walletBalance += Number(amount);
+      await user.save();
+    } else {
+      const updated = await User.findOneAndUpdate(
+        { _id: req.params.id, walletBalance: { $gte: Number(amount) } },
+        { $inc: { walletBalance: -Number(amount) } },
+        { new: true }
+      );
+      if (!updated) return res.status(400).json({ success: false, message: 'Insufficient balance to deduct.' });
     }
-    await user.save();
-    await Transaction.create({ user: user._id, type: 'earning', amount: Number(amount), status: 'completed', description: note || `Admin ${action}ed N${amount}`, processedBy: req.user.id });
-    res.json({ success: true, message: `Balance ${action === 'add' ? 'added' : 'deducted'} successfully.`, newBalance: user.walletBalance });
+    const finalUser = await User.findById(req.params.id);
+    await Transaction.create({ user: req.params.id, type: action === 'add' ? 'admin_credit' : 'admin_debit', amount: Number(amount), status: 'completed', description: note || `Admin ${action}ed N${amount}`, processedBy: req.user.id });
+    res.json({ success: true, message: `Balance ${action === 'add' ? 'added' : 'deducted'} successfully.`, newBalance: finalUser.walletBalance });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 
