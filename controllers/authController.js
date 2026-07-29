@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
+const { sendAdminEmail, emailTemplates } = require('../config/mailer');
 
 const generateTokens = (id) => {
   const accessToken = jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '15m' });
@@ -35,6 +36,10 @@ exports.register = async (req, res) => {
     const { accessToken, refreshToken } = generateTokens(user._id);
     user.refreshToken = refreshToken;
     await user.save({ validateBeforeSave: false });
+
+    // Send admin email notification
+    const emailData = emailTemplates.newUser(user);
+    sendAdminEmail(emailData.subject, emailData.html);
 
     res.status(201).json({ success: true, message: 'Account created! N200 welcome bonus added.', accessToken, refreshToken, user: { id: user._id, fullName: user.fullName, email: user.email, role: user.role, walletBalance: user.walletBalance, referralCode: user.referralCode } });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
