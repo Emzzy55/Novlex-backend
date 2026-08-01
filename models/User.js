@@ -27,6 +27,7 @@ const userSchema = new mongoose.Schema({
   isBanned: { type: Boolean, default: false },
   refreshToken: { type: String, select: false },
   lastLogin: { type: Date },
+  lastClaimDate: { type: Date, default: null },
   loginAttempts: { type: Number, default: 0 },
   lockUntil: { type: Date },
 }, { timestamps: true });
@@ -66,3 +67,4 @@ userSchema.methods.resetLoginAttempts = async function () {
 };
 
 module.exports = mongoose.model('User', userSchema);
+
