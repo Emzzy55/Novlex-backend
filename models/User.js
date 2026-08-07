@@ -2,16 +2,16 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema({
-  fullName: { type: String, required: true, trim: true, maxlength: 60 },
+  fullName: { type: String, required: true, trim: true },
   email: { type: String, required: true, unique: true, lowercase: true, trim: true },
   password: { type: String, required: true, minlength: 6, select: false },
-  role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  role: { type: String, enum: ['user', 'admin'], default: 'user' }, // Never set from request body
   phone: { type: String, trim: true },
   bankName: { type: String, trim: true },
   bankAccount: { type: String, trim: true },
   bankAccountName: { type: String, trim: true },
 
-  walletBalance: { type: Number, default: 200 },
+  walletBalance: { type: Number, default: 200, min: 0 },
   totalEarnings: { type: Number, default: 0 },
   totalDeposited: { type: Number, default: 0 },
   totalWithdrawn: { type: Number, default: 0 },
@@ -28,13 +28,34 @@ const userSchema = new mongoose.Schema({
   refreshToken: { type: String, select: false },
   lastLogin: { type: Date },
   lastClaimDate: { type: Date, default: null },
+  loginHistory: [{
+    timestamp: { type: Date, default: Date.now },
+    ip: { type: String },
+    device: { type: String },
+  }],
   loginAttempts: { type: Number, default: 0 },
   lockUntil: { type: Date },
+  adminLoginAttempts: { type: Number, default: 0 },
+  adminLockUntil: { type: Date },
+
+  // Claim lock to prevent race condition (Bug 16)
+  isClaiming: { type: Boolean, default: false },
 }, { timestamps: true });
+
+// Generate unique referral code with retry logic (Bug 13)
+const generateReferralCode = () => {
+  return Math.random().toString(36).substring(2, 8).toUpperCase() +
+    Date.now().toString(36).toUpperCase().substring(-4);
+};
 
 userSchema.pre('save', async function (next) {
   if (this.isNew) {
-    this.referralCode = Math.random().toString(36).substring(2, 8).toUpperCase() + Date.now().toString(36).toUpperCase();
+    // Retry up to 5 times if referral code collision
+    for (let i = 0; i < 5; i++) {
+      const code = generateReferralCode();
+      const existing = await mongoose.model('User').findOne({ referralCode: code });
+      if (!existing) { this.referralCode = code; break; }
+    }
   }
   if (this.isModified('password')) {
     this.password = await bcrypt.hash(this.password, 12);
@@ -67,4 +88,3 @@ userSchema.methods.resetLoginAttempts = async function () {
 };
 
 module.exports = mongoose.model('User', userSchema);
-
