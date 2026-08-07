@@ -24,9 +24,13 @@ const transactionSchema = new mongoose.Schema({
   referralLevel: { type: Number },
 }, { timestamps: true });
 
+// Bug 21 Fix: More unique reference using crypto-style generation
 transactionSchema.pre('save', function (next) {
   if (this.isNew && !this.reference) {
-    this.reference = 'NVX' + Date.now() + Math.random().toString(36).substring(2, 6).toUpperCase();
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const random1 = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const random2 = Math.random().toString(36).substring(2, 6).toUpperCase();
+    this.reference = 'NVX' + timestamp + random1 + random2;
   }
   next();
 });
