@@ -4,15 +4,24 @@ const Investment = require('../models/Investment');
 
 exports.getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).populate('referralLevel1', 'fullName email createdAt').populate('referralLevel2', 'fullName email createdAt').populate('referralLevel3', 'fullName email createdAt');
+    const user = await User.findById(req.user.id).select('+loginHistory').populate('referralLevel1', 'fullName email createdAt').populate('referralLevel2', 'fullName email createdAt').populate('referralLevel3', 'fullName email createdAt');
     res.json({ success: true, user });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 
 exports.updateProfile = async (req, res) => {
   try {
-    const { fullName, phone, bankName, bankAccount, bankAccountName } = req.body;
-    const user = await User.findByIdAndUpdate(req.user.id, { fullName, phone, bankName, bankAccount, bankAccountName }, { new: true, runValidators: true });
+    // Bug 19 Fix: Only allow specific fields - never role, walletBalance, etc.
+    const allowed = ['fullName', 'phone', 'bankName', 'bankAccount', 'bankAccountName'];
+    const updates = {};
+    allowed.forEach(field => {
+      if (req.body[field] !== undefined) updates[field] = String(req.body[field]).trim();
+    });
+    // Validate bank account if provided
+    if (updates.bankAccount && (updates.bankAccount.length !== 10 || !/^\d+$/.test(updates.bankAccount))) {
+      return res.status(400).json({ success: false, message: 'Account number must be exactly 10 digits.' });
+    }
+    const user = await User.findByIdAndUpdate(req.user.id, updates, { new: true, runValidators: true });
     res.json({ success: true, message: 'Profile updated.', user });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
@@ -33,7 +42,8 @@ exports.getDashboard = async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     const activeInvestments = await Investment.find({ user: req.user.id, status: 'active' });
-    const recentTransactions = await Transaction.find({ user: req.user.id }).sort({ createdAt: -1 }).limit(10);
+    // Bug 14 Fix: Never return paymentProof to user
+    const recentTransactions = await Transaction.find({ user: req.user.id }).sort({ createdAt: -1 }).limit(10).select('-paymentProof');
     const totalReferrals = user.referralLevel1.length + user.referralLevel2.length + user.referralLevel3.length;
     res.json({
       success: true,

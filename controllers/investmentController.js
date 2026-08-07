@@ -16,77 +16,85 @@ const PLANS = [
 
 const isOperatingHours = () => {
   const now = new Date();
-  const day = now.getDay(); // 0=Sun, 6=Sat
+  const day = now.getDay();
   const hour = now.getHours();
-  const isWeekday = day >= 1 && day <= 5;
-  const isInHours = hour >= 8 && hour < 18;
-  return isWeekday && isInHours;
+  return day >= 1 && day <= 5 && hour >= 8 && hour < 18;
 };
 
 exports.getPlans = (req, res) => res.json({ success: true, plans: PLANS });
 
 exports.invest = async (req, res) => {
   try {
-    const { planName, fromWallet } = req.body;
+    const { planName } = req.body;
     const plan = PLANS.find(p => p.name === planName);
     if (!plan) return res.status(400).json({ success: false, message: 'Invalid plan selected.' });
 
     if (!isOperatingHours()) {
-      return res.status(400).json({ success: false, message: 'Investments are only accepted Monday–Friday, 8:00 AM – 6:00 PM.' });
+      return res.status(400).json({ success: false, message: 'Investments only accepted Monday–Friday, 8:00 AM – 6:00 PM.' });
     }
 
-    const user = await User.findById(req.user.id);
-    if (user.walletBalance < plan.amount) {
-      return res.status(400).json({ success: false, message: `Insufficient balance. You need ${plan.amount.toLocaleString()} but have ${user.walletBalance.toLocaleString()}.` });
-    }
+    // Bug 15 Fix: Validate amount is positive
+    if (plan.amount <= 0) return res.status(400).json({ success: false, message: 'Invalid plan amount.' });
 
-    user.walletBalance -= plan.amount;
-    user.totalDeposited += plan.amount;
-    await user.save();
+    // Atomic wallet deduction to prevent race conditions
+    const user = await User.findOneAndUpdate(
+      { _id: req.user.id, walletBalance: { $gte: plan.amount } },
+      { $inc: { walletBalance: -plan.amount, totalDeposited: plan.amount } },
+      { new: true }
+    );
 
-    if (fromWallet) {
-      await Transaction.create({ user: user._id, type: 'reinvestment', amount: plan.amount, status: 'completed', description: `Invested in ${plan.name} plan (from wallet)` });
-    }
+    if (!user) return res.status(400).json({ success: false, message: `Insufficient wallet balance. You need ${formatN(plan.amount)}.` });
 
     const investment = await Investment.create({
       user: user._id, planName: plan.name, amount: plan.amount, dailyEarning: plan.dailyEarning
     });
 
-    // Referral commissions
+    await Transaction.create({
+      user: user._id, type: 'reinvestment', amount: plan.amount,
+      status: 'completed', description: `Invested in ${plan.name} plan`
+    });
+
+    // Bug 2 Fix: Referral commissions - properly await each level
     if (user.referredBy) {
-      const level1 = await User.findById(user.referredBy);
-      if (level1) {
-        const c1 = plan.amount * 0.15;
-        level1.walletBalance += c1; level1.totalReferralEarnings += c1;
-        await level1.save();
-        await Transaction.create({ user: level1._id, type: 'referral_bonus', amount: c1, status: 'completed', description: `Level 1 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 1 });
-        if (level1.referredBy) {
-          const level2 = await User.findById(level1.referredBy);
-          if (level2) {
-            const c2 = plan.amount * 0.03;
-            level2.walletBalance += c2; level2.totalReferralEarnings += c2;
-            await level2.save();
-            await Transaction.create({ user: level2._id, type: 'referral_bonus', amount: c2, status: 'completed', description: `Level 2 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 2 });
-            if (level2.referredBy) {
-              const level3 = await User.findById(level2.referredBy);
-              if (level3) {
-                const c3 = plan.amount * 0.02;
-                level3.walletBalance += c3; level3.totalReferralEarnings += c3;
-                await level3.save();
-                await Transaction.create({ user: level3._id, type: 'referral_bonus', amount: c3, status: 'completed', description: `Level 3 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 3 });
+      try {
+        const level1 = await User.findById(user.referredBy);
+        if (level1 && !level1.isBanned) {
+          const c1 = Math.floor(plan.amount * 0.15);
+          await User.findByIdAndUpdate(level1._id, { $inc: { walletBalance: c1, totalReferralEarnings: c1 } });
+          await Transaction.create({ user: level1._id, type: 'referral_bonus', amount: c1, status: 'completed', description: `Level 1 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 1 });
+
+          if (level1.referredBy) {
+            const level2 = await User.findById(level1.referredBy);
+            if (level2 && !level2.isBanned) {
+              const c2 = Math.floor(plan.amount * 0.03);
+              await User.findByIdAndUpdate(level2._id, { $inc: { walletBalance: c2, totalReferralEarnings: c2 } });
+              await Transaction.create({ user: level2._id, type: 'referral_bonus', amount: c2, status: 'completed', description: `Level 2 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 2 });
+
+              if (level2.referredBy) {
+                const level3 = await User.findById(level2.referredBy);
+                if (level3 && !level3.isBanned) {
+                  const c3 = Math.floor(plan.amount * 0.02);
+                  await User.findByIdAndUpdate(level3._id, { $inc: { walletBalance: c3, totalReferralEarnings: c3 } });
+                  await Transaction.create({ user: level3._id, type: 'referral_bonus', amount: c3, status: 'completed', description: `Level 3 referral bonus from ${user.fullName}`, fromUser: user._id, referralLevel: 3 });
+                }
               }
             }
           }
         }
-      }
+      } catch (refErr) { console.error('Referral commission error:', refErr.message); }
     }
 
-    const emailData = emailTemplates.newInvestment(user, plan.name, plan.amount, plan.dailyEarning);
-    sendAdminEmail(emailData.subject, emailData.html);
+    // Notify admin
+    try {
+      const emailData = emailTemplates.newInvestment(user, plan.name, plan.amount, plan.dailyEarning);
+      sendAdminEmail(emailData.subject, emailData.html);
+    } catch (e) { console.error('Email error:', e.message); }
 
-    res.status(201).json({ success: true, message: `${plan.name} plan activated! You can claim your first earnings in 24 hours.`, investment });
+    res.status(201).json({ success: true, message: `${plan.name} activated! Claim your first earnings in 24 hours.`, investment });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
+
+const formatN = (n) => '₦' + Number(n).toLocaleString('en-NG');
 
 exports.getMyInvestments = async (req, res) => {
   try {
@@ -95,73 +103,99 @@ exports.getMyInvestments = async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 
-// Manual daily claim
+// Bug 16 Fix: Atomic claim with lock to prevent race condition
 exports.claimEarnings = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
     const now = new Date();
 
-    // Check if user has active investments
-    const activeInvestments = await Investment.find({ user: user._id, status: 'active' });
-    if (!activeInvestments.length) {
-      return res.status(400).json({ success: false, message: 'You have no active investment plans to claim from.' });
-    }
+    // Atomic lock - set isClaiming to true only if it's currently false
+    const user = await User.findOneAndUpdate(
+      { _id: req.user.id, isClaiming: false },
+      { $set: { isClaiming: true } },
+      { new: true }
+    );
 
-    // Check 24hr cooldown
-    if (user.lastClaimDate) {
-      const hoursSinceLast = (now - new Date(user.lastClaimDate)) / (1000 * 60 * 60);
-      if (hoursSinceLast < 24) {
-        const hoursLeft = (24 - hoursSinceLast).toFixed(1);
-        return res.status(400).json({ success: false, message: `You already claimed today. Next claim available in ${hoursLeft} hours.`, hoursLeft: Number(hoursLeft) });
-      }
-    }
+    if (!user) return res.status(429).json({ success: false, message: 'Claim already in progress. Please wait.' });
 
-    // Calculate claimable amount from all active investments
-    let totalClaim = 0;
-    const claimedPlans = [];
-
-    for (const inv of activeInvestments) {
-      // Check if investment started more than 24hrs ago
-      const hoursSinceStart = (now - new Date(inv.startDate)) / (1000 * 60 * 60);
-      if (hoursSinceStart < 24) continue;
-
-      // Check days not exceeded
-      if (inv.daysCompleted >= inv.totalDays) {
-        inv.status = 'completed';
-        await inv.save();
-        continue;
+    try {
+      const activeInvestments = await Investment.find({ user: user._id, status: 'active' });
+      if (!activeInvestments.length) {
+        await User.findByIdAndUpdate(user._id, { isClaiming: false });
+        return res.status(400).json({ success: false, message: 'No active investment plans to claim from.' });
       }
 
-      totalClaim += inv.dailyEarning;
-      inv.daysCompleted += 1;
-      inv.totalEarned += inv.dailyEarning;
-      inv.lastCreditDate = now;
-      if (inv.daysCompleted >= inv.totalDays) inv.status = 'completed';
-      await inv.save();
-      claimedPlans.push(inv.planName);
+      // Bug 3 Fix: Single clean 24hr check using server time
+      if (user.lastClaimDate) {
+        const msSinceLast = now - new Date(user.lastClaimDate);
+        const hoursSinceLast = msSinceLast / (1000 * 60 * 60);
+        if (hoursSinceLast < 24) {
+          const hoursLeft = Math.ceil(24 - hoursSinceLast);
+          const minutesLeft = Math.ceil((24 * 60) - (msSinceLast / 60000));
+          await User.findByIdAndUpdate(user._id, { isClaiming: false });
+          return res.status(400).json({
+            success: false,
+            message: `Already claimed today. Next claim in ${hoursLeft} hour${hoursLeft !== 1 ? 's' : ''}.`,
+            hoursLeft,
+            minutesLeft,
+            nextClaimTime: new Date(new Date(user.lastClaimDate).getTime() + 24 * 60 * 60 * 1000)
+          });
+        }
+      }
+
+      let totalClaim = 0;
+      const claimedPlans = [];
+
+      for (const inv of activeInvestments) {
+        if (inv.daysCompleted >= inv.totalDays) {
+          await Investment.findByIdAndUpdate(inv._id, { status: 'completed' });
+          continue;
+        }
+        // Only claim if investment started more than 24hrs ago
+        const hoursSinceStart = (now - new Date(inv.startDate)) / (1000 * 60 * 60);
+        if (hoursSinceStart < 24) continue;
+
+        totalClaim += inv.dailyEarning;
+        const newDays = inv.daysCompleted + 1;
+        const newStatus = newDays >= inv.totalDays ? 'completed' : 'active';
+        await Investment.findByIdAndUpdate(inv._id, {
+          daysCompleted: newDays,
+          totalEarned: inv.totalEarned + inv.dailyEarning,
+          lastCreditDate: now,
+          status: newStatus
+        });
+        claimedPlans.push(inv.planName);
+      }
+
+      if (totalClaim === 0) {
+        await User.findByIdAndUpdate(user._id, { isClaiming: false });
+        return res.status(400).json({ success: false, message: 'Nothing to claim yet. Wait 24 hours after activating a plan.' });
+      }
+
+      // Update user balance atomically and release lock
+      const updatedUser = await User.findByIdAndUpdate(
+        user._id,
+        { $inc: { walletBalance: totalClaim, totalEarnings: totalClaim }, lastClaimDate: now, isClaiming: false },
+        { new: true }
+      );
+
+      await Transaction.create({
+        user: user._id, type: 'earning', amount: totalClaim, status: 'completed',
+        description: `Daily earnings claimed from: ${claimedPlans.join(', ')}`
+      });
+
+      res.json({
+        success: true,
+        message: `Successfully claimed ${formatN(totalClaim)}!`,
+        amountClaimed: totalClaim,
+        newBalance: updatedUser.walletBalance,
+        nextClaimTime: new Date(now.getTime() + 24 * 60 * 60 * 1000)
+      });
+
+    } catch (innerErr) {
+      // Always release lock on error
+      await User.findByIdAndUpdate(req.user.id, { isClaiming: false });
+      throw innerErr;
     }
-
-    if (totalClaim === 0) {
-      return res.status(400).json({ success: false, message: 'Nothing to claim yet. Wait 24 hours after activating a plan.' });
-    }
-
-    user.walletBalance += totalClaim;
-    user.totalEarnings += totalClaim;
-    user.lastClaimDate = now;
-    await user.save();
-
-    await Transaction.create({
-      user: user._id, type: 'earning', amount: totalClaim, status: 'completed',
-      description: `Daily earnings claimed from: ${claimedPlans.join(', ')}`
-    });
-
-    res.json({
-      success: true,
-      message: `Successfully claimed ₦${totalClaim.toLocaleString()}!`,
-      amountClaimed: totalClaim,
-      newBalance: user.walletBalance,
-      nextClaimIn: 24
-    });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 
@@ -173,29 +207,36 @@ exports.getClaimStatus = async (req, res) => {
 
     let canClaim = false;
     let hoursLeft = 0;
-    let totalClaimable = 0;
+    let minutesLeft = 0;
     let nextClaimTime = null;
+    let totalClaimable = 0;
 
     if (user.lastClaimDate) {
-      const hoursSinceLast = (now - new Date(user.lastClaimDate)) / (1000 * 60 * 60);
+      const msSinceLast = now - new Date(user.lastClaimDate);
+      const hoursSinceLast = msSinceLast / (1000 * 60 * 60);
       hoursLeft = Math.max(0, 24 - hoursSinceLast);
+      minutesLeft = Math.max(0, Math.ceil((24 * 60) - (msSinceLast / 60000)));
       canClaim = hoursSinceLast >= 24;
       nextClaimTime = new Date(new Date(user.lastClaimDate).getTime() + 24 * 60 * 60 * 1000);
     } else {
+      // Never claimed - can claim if any investment is > 24hrs old
       canClaim = activeInvestments.some(inv => {
         const hrs = (now - new Date(inv.startDate)) / (1000 * 60 * 60);
-        return hrs >= 24;
+        return hrs >= 24 && inv.daysCompleted < inv.totalDays;
       });
     }
 
     for (const inv of activeInvestments) {
-      if (inv.daysCompleted < inv.totalDays) totalClaimable += inv.dailyEarning;
+      if (inv.daysCompleted < inv.totalDays) {
+        const hrs = (now - new Date(inv.startDate)) / (1000 * 60 * 60);
+        if (hrs >= 24) totalClaimable += inv.dailyEarning;
+      }
     }
 
     res.json({
-      success: true,
-      canClaim,
+      success: true, canClaim,
       hoursLeft: Number(hoursLeft.toFixed(2)),
+      minutesLeft,
       totalClaimable,
       lastClaimDate: user.lastClaimDate,
       nextClaimTime,
