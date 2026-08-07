@@ -9,18 +9,31 @@ const { generalLimiter } = require('./middleware/rateLimiter');
 const startDailyEarningsCron = require('./cron/dailyEarnings');
 
 const app = express();
-
-// Connect DB
 connectDB();
 
-// Security middleware
-app.use(helmet());
+// Bug 22 Fix: Only allow production frontend URL
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'https://novlex.com.ng',
+  'https://www.novlex.com.ng',
+].filter(Boolean);
+
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
+
 app.use(cors({
-  origin: [process.env.FRONTEND_URL, 'http://localhost:3000', 'http://127.0.0.1:5500'],
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(mongoSanitize()); // Prevent NoSQL injection
@@ -33,21 +46,26 @@ app.use('/api/user', require('./routes/user'));
 app.use('/api/investments', require('./routes/investment'));
 app.use('/api/transactions', require('./routes/transaction'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/announcements', require('./routes/announcement'));
+app.use('/api/notifications', require('./routes/notification'));
 
-// Health check
+// Health check - used by UptimeRobot to keep server awake
 app.get('/api/health', (req, res) => res.json({ success: true, message: 'Novlex API is running', time: new Date().toISOString() }));
 
-// 404 handler
+// 404
 app.use('*', (req, res) => res.status(404).json({ success: false, message: 'Route not found.' }));
 
 // Global error handler
 app.use((err, req, res, next) => {
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({ success: false, message: 'Access denied.' });
+  }
   console.error(err.stack);
-  res.status(err.status || 500).json({ success: false, message: err.message || 'Internal server error.' });
+  res.status(err.status || 500).json({ success: false, message: 'Internal server error.' });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`Novlex server running on port ${PORT}`);
+  console.log(`✅ Novlex server running on port ${PORT}`);
   startDailyEarningsCron();
 });
