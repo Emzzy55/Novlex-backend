@@ -1,26 +1,26 @@
 const cron = require('node-cron');
 const Investment = require('../models/Investment');
 
-// This cron now only marks investments as completed after 30 days
-// Earnings are credited manually via the /investments/claim endpoint
+// Bug 8 Fix: Cron ONLY marks investments as completed after 30 days
+// Earnings are NEVER auto-credited here - users must manually claim via /investments/claim
 const startDailyEarningsCron = () => {
-  // Run every day at midnight to mark completed investments
+  // Run every day at midnight Lagos time
   cron.schedule('0 0 * * *', async () => {
-    console.log('Running investment completion check...');
+    console.log('[CRON] Running investment completion check...');
     try {
       const now = new Date();
-      const investments = await Investment.find({ status: 'active' });
-      let completed = 0;
-      for (const inv of investments) {
-        if (inv.daysCompleted >= inv.totalDays) {
-          inv.status = 'completed';
-          await inv.save();
-          completed++;
-        }
-      }
-      console.log(`Completed ${completed} investments.`);
-    } catch (err) { console.error('Cron error:', err.message); }
+      // Only mark as completed - never touch walletBalance
+      const result = await Investment.updateMany(
+        { status: 'active', daysCompleted: { $gte: 30 } },
+        { $set: { status: 'completed' } }
+      );
+      console.log(`[CRON] Marked ${result.modifiedCount} investments as completed.`);
+    } catch (err) {
+      console.error('[CRON] Error:', err.message);
+    }
   }, { timezone: 'Africa/Lagos' });
+
+  console.log('[CRON] Daily investment completion checker started.');
 };
 
 module.exports = startDailyEarningsCron;
