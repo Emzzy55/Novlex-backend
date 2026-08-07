@@ -5,6 +5,7 @@ const {
   getDashboard, getAllUsers, getUserDetail, updateUserBalance, banUser,
   getPendingDeposits, approveDeposit, rejectDeposit,
   getPendingWithdrawals, approveWithdrawal, rejectWithdrawal,
+  getAnalytics, exportUsersCSV
 } = require('../controllers/adminController');
 
 router.use(protect, adminOnly);
@@ -22,5 +23,9 @@ router.put('/deposits/:id/reject', rejectDeposit);
 router.get('/withdrawals/pending', getPendingWithdrawals);
 router.put('/withdrawals/:id/approve', approveWithdrawal);
 router.put('/withdrawals/:id/reject', rejectWithdrawal);
+
+// Analytics & Export
+router.get('/analytics', getAnalytics);
+router.get('/export/users', exportUsersCSV);
 
 module.exports = router;
