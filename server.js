@@ -16,6 +16,7 @@ const allowedOrigins = [
   process.env.FRONTEND_URL,
   'https://novlex.com.ng',
   'https://www.novlex.com.ng',
+  'https://novlex.netlify.app',
 ].filter(Boolean);
 
 app.use(helmet({
@@ -24,9 +25,15 @@ app.use(helmet({
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl)
+    // Allow requests with no origin (mobile apps, Postman, curl)
     if (!origin) return callback(null, true);
+    // Allow exact matches
     if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Allow any netlify.app subdomain (for preview deploys)
+    if (origin.endsWith('.netlify.app')) return callback(null, true);
+    // Allow localhost for admin testing
+    if (process.env.NODE_ENV !== 'production') return callback(null, true);
+    console.warn('CORS blocked origin:', origin);
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
