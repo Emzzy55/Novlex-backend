@@ -205,6 +205,16 @@ exports.getClaimStatus = async (req, res) => {
     const activeInvestments = await Investment.find({ user: user._id, status: 'active' });
     const now = new Date();
 
+    // If no active investments - return canClaim false immediately
+    if (!activeInvestments.length) {
+      return res.json({
+        success: true, canClaim: false,
+        hoursLeft: 0, minutesLeft: 0, totalClaimable: 0,
+        lastClaimDate: user.lastClaimDate, nextClaimTime: null,
+        activeInvestments: 0, totalEarnings: user.totalEarnings
+      });
+    }
+
     let canClaim = false;
     let hoursLeft = 0;
     let minutesLeft = 0;
@@ -219,19 +229,23 @@ exports.getClaimStatus = async (req, res) => {
       canClaim = hoursSinceLast >= 24;
       nextClaimTime = new Date(new Date(user.lastClaimDate).getTime() + 24 * 60 * 60 * 1000);
     } else {
-      // Never claimed - can claim if any investment is > 24hrs old
+      // Never claimed - can only claim if investment started > 24hrs ago
       canClaim = activeInvestments.some(inv => {
         const hrs = (now - new Date(inv.startDate)) / (1000 * 60 * 60);
         return hrs >= 24 && inv.daysCompleted < inv.totalDays;
       });
     }
 
+    // Calculate claimable only from eligible investments
     for (const inv of activeInvestments) {
       if (inv.daysCompleted < inv.totalDays) {
         const hrs = (now - new Date(inv.startDate)) / (1000 * 60 * 60);
         if (hrs >= 24) totalClaimable += inv.dailyEarning;
       }
     }
+
+    // If canClaim is true but nothing is actually claimable, set to false
+    if (totalClaimable === 0) canClaim = false;
 
     res.json({
       success: true, canClaim,
