@@ -6,9 +6,9 @@ const { sendAdminEmail, emailTemplates } = require('../config/mailer');
 
 const isOperatingHours = () => {
   const now = new Date();
-  const day = now.getDay();
   const hour = now.getHours();
-  return day >= 1 && day <= 5 && hour >= 8 && hour < 18;
+  // Monday to Sunday, 5AM to 12AM (midnight)
+  return hour >= 5 && hour < 24;
 };
 
 // Bug 15 Fix: Validate amount is positive finite number
@@ -71,7 +71,7 @@ exports.requestWithdrawal = async (req, res) => {
     if (bankAccount.length !== 10 || !/^\d+$/.test(bankAccount)) return res.status(400).json({ success: false, message: 'Account number must be exactly 10 digits.' });
 
     // Operating hours check
-    if (!isOperatingHours()) return res.status(400).json({ success: false, message: 'Withdrawals only processed Monday–Friday, 8:00 AM – 6:00 PM.' });
+    if (!isOperatingHours()) return res.status(400).json({ success: false, message: 'Withdrawals are only processed from 5:00 AM to midnight, 7 days a week.' });
 
     // Bug fix: Must have active investment plan
     const activePlan = await Investment.findOne({ user: req.user.id, status: 'active' });

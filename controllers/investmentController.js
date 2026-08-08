@@ -16,9 +16,9 @@ const PLANS = [
 
 const isOperatingHours = () => {
   const now = new Date();
-  const day = now.getDay();
   const hour = now.getHours();
-  return day >= 1 && day <= 5 && hour >= 8 && hour < 18;
+  // Monday to Sunday, 5AM to 12AM (midnight)
+  return hour >= 5 && hour < 24;
 };
 
 exports.getPlans = (req, res) => res.json({ success: true, plans: PLANS });
@@ -30,7 +30,7 @@ exports.invest = async (req, res) => {
     if (!plan) return res.status(400).json({ success: false, message: 'Invalid plan selected.' });
 
     if (!isOperatingHours()) {
-      return res.status(400).json({ success: false, message: 'Investments only accepted Monday–Friday, 8:00 AM – 6:00 PM.' });
+      return res.status(400).json({ success: false, message: 'Investments are only accepted from 5:00 AM to midnight, 7 days a week.' });
     }
 
     // Bug 15 Fix: Validate amount is positive
